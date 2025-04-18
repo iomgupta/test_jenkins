@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sample-nodejs-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sample-nodejs-app
+  template:
+    metadata:
+      labels:
+        app: sample-nodejs-app
+    spec:
+      containers:
+      - name: sample-nodejs-app
+        image: ${DOCKER_REGISTRY}/sample-nodejs-app:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: "production"
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sample-nodejs-app
+spec:
+  selector:
+    app: sample-nodejs-app
+  ports:
+  - port: 80
+    targetPort: 3000
+  type: ClusterIP
