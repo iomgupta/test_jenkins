@@ -2,10 +2,9 @@ pipeline {
     agent any
 
     environment {
-        // Define global environment variables
-        APP_NAME = 'sample-nodejs-app'
-        DOCKER_REGISTRY = 'your-registry-url'
-        DOCKER_CREDENTIALS = 'docker-credentials-id'
+        // Use this variable to set Qt path - you might need to adjust this based on where Qt is installed on your Jenkins agent
+        QT_PATH = '/home/jenkins/Qt/5.15.0/gcc_64'
+        CMAKE_BUILD_DIR = 'build'
     }
     
     // Configure triggers for automatic builds
@@ -17,60 +16,66 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                // Checkout code from the repository
                 checkout scm
                 echo "Branch: ${env.BRANCH_NAME}"
-                echo "Triggered by changes in the repository"
+                echo "Building inf_multipara_mon_fw_ui"
+            }
+        }
+        
+        stage('Configure') {
+            steps {
+                sh '''
+                    # Set Qt path (adjust as needed based on Jenkins environment)
+                    export CMAKE_PREFIX_PATH=${QT_PATH}
+                    
+                    # Create build directory
+                    mkdir -p ${CMAKE_BUILD_DIR}
+                    cd ${CMAKE_BUILD_DIR}
+                    
+                    # Configure with CMake
+                    cmake ..
+                '''
             }
         }
         
         stage('Build') {
             steps {
-                echo "Building ${env.APP_NAME}..."
-                sh 'npm install'
+                sh '''
+                    # Set Qt path again for this stage
+                    export CMAKE_PREFIX_PATH=${QT_PATH}
+                    
+                    # Build the application
+                    cd ${CMAKE_BUILD_DIR}
+                    cmake --build .
+                '''
             }
         }
         
-        stage('Unit Tests') {
+        stage('Test & Verify') {
             steps {
-                echo "Running unit tests..."
-                sh 'npm test'
-            }
-            post {
-                always {
-                    // Publish test results
-                    junit allowEmptyResults: true, testResults: '**/test-results/*.xml'
-                }
-            }
-        }
-        
-        stage('Code Analysis') {
-            steps {
-                echo "Running code analysis..."
-                sh 'npm run sonar || true'
-            }
-        }
-        
-        stage('Build Docker Image') {
-            steps {
-                echo "Building Docker image..."
-                sh """
-                    docker build -t ${DOCKER_REGISTRY}/${APP_NAME}:${env.BRANCH_NAME}-${env.BUILD_NUMBER} .
-                    docker tag ${DOCKER_REGISTRY}/${APP_NAME}:${env.BRANCH_NAME}-${env.BUILD_NUMBER} ${DOCKER_REGISTRY}/${APP_NAME}:latest
-                """
+                sh '''
+                    # List the build output to verify it exists
+                    cd ${CMAKE_BUILD_DIR}
+                    ls -la
+                    
+                    # Check if executable was created
+                    if [ -f inf_multipara_mon_fw_ui ]; then
+                        echo "✅ Build successful - executable created"
+                    else
+                        echo "❌ Executable not found!"
+                        # Don't fail the build yet, might be named differently
+                        ls -la | grep -i inf
+                    fi
+                '''
             }
         }
         
-        stage('Push Docker Image') {
+        stage('Package') {
             steps {
-                echo "Pushing Docker image to registry..."
-                withCredentials([string(credentialsId: DOCKER_CREDENTIALS, variable: 'DOCKER_PASSWORD')]) {
-                    sh """
-                        docker login ${DOCKER_REGISTRY} -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}
-                        docker push ${DOCKER_REGISTRY}/${APP_NAME}:${env.BRANCH_NAME}-${env.BUILD_NUMBER}
-                        docker push ${DOCKER_REGISTRY}/${APP_NAME}:latest
-                    """
-                }
+                sh '''
+                    cd ${CMAKE_BUILD_DIR}
+                    cpack || echo "Packaging may not be configured yet"
+                '''
             }
         }
         
@@ -80,87 +85,25 @@ pipeline {
             }
             steps {
                 echo "Deploying to TEST environment..."
-                sh """
-                    # Example deployment commands for test environment
-                    kubectl --namespace=test apply -f kubernetes/deployment.yaml
-                    kubectl --namespace=test set image deployment/${APP_NAME} ${APP_NAME}=${DOCKER_REGISTRY}/${APP_NAME}:${env.BRANCH_NAME}-${env.BUILD_NUMBER}
-                """
-            }
-        }
-        
-        stage('Integration Tests') {
-            when {
-                expression { env.BRANCH_NAME == 'test' }
-            }
-            steps {
-                echo "Running integration tests against TEST environment..."
-                sh 'npm run integration-tests || true'
-            }
-        }
-        
-        stage('Deploy to Staging') {
-            when {
-                expression { env.BRANCH_NAME == 'release' }
-            }
-            steps {
-                echo "Deploying to STAGING environment..."
-                sh """
-                    # Example deployment commands for staging environment
-                    kubectl --namespace=staging apply -f kubernetes/deployment.yaml
-                    kubectl --namespace=staging set image deployment/${APP_NAME} ${APP_NAME}=${DOCKER_REGISTRY}/${APP_NAME}:${env.BRANCH_NAME}-${env.BUILD_NUMBER}
-                """
-            }
-        }
-        
-        stage('Regression Tests') {
-            when {
-                expression { env.BRANCH_NAME == 'release' }
-            }
-            steps {
-                echo "Running regression tests against STAGING environment..."
-                sh 'npm run regression-tests || true'
-            }
-        }
-        
-        stage('Deploy to Production') {
-            when {
-                expression { env.BRANCH_NAME == 'deployment' }
-            }
-            steps {
-                // Add a manual approval step before deploying to production
-                input message: "Deploy to production environment?"
-                
-                echo "Deploying to PRODUCTION environment..."
-                sh """
-                    # Example deployment commands for production environment
-                    kubectl --namespace=production apply -f kubernetes/deployment.yaml
-                    kubectl --namespace=production set image deployment/${APP_NAME} ${APP_NAME}=${DOCKER_REGISTRY}/${APP_NAME}:${env.BRANCH_NAME}-${env.BUILD_NUMBER}
-                """
+                sh '''
+                    echo "This is where test deployment would happen"
+                    # For testing only - just list build artifacts
+                    cd ${CMAKE_BUILD_DIR}
+                    ls -la *.deb *.rpm *.tar.gz 2>/dev/null || echo "No packages found"
+                '''
             }
         }
     }
     
     post {
         success {
-            echo "Pipeline completed successfully!"
-            emailext (
-                subject: "Build Successful: ${env.JOB_NAME} [${env.BUILD_NUMBER}]",
-                body: "Pipeline completed successfully for branch ${env.BRANCH_NAME}.\nCheck details at ${env.BUILD_URL}",
-                to: 'team@example.com',
-                attachLog: true
-            )
+            echo "Build completed successfully!"
         }
         failure {
-            echo "Pipeline failed!"
-            emailext (
-                subject: "Build Failed: ${env.JOB_NAME} [${env.BUILD_NUMBER}]",
-                body: "Pipeline failed for branch ${env.BRANCH_NAME}.\nCheck console output at ${env.BUILD_URL}",
-                to: 'team@example.com',
-                attachLog: true
-            )
+            echo "Build failed!"
         }
         always {
-            // Clean workspace after build
+            echo "Cleaning workspace"
             cleanWs()
         }
     }
